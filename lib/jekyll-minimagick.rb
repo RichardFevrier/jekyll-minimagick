@@ -17,6 +17,8 @@ module Jekyll
         @base = base
         @dir  = dir
         @name = name
+        @relative_path = File.join(*[@dir, @name].compact)
+        @extname = File.extname(@name)
         @dst_dir = preset.delete('destination')
         @src_dir = preset.delete('source')
         @commands = preset
