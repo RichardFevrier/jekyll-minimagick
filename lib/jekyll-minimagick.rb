@@ -4,14 +4,7 @@ module Jekyll
   module JekyllMinimagick
 
     class GeneratedImageFile < Jekyll::StaticFile
-      # Initialize a new GeneratedImage.
-      #   +site+ is the Site
-      #   +base+ is the String path to the <source>
-      #   +dir+ is the String path between <source> and the file
-      #   +name+ is the String filename of the file
-      #   +preset+ is the Preset hash from the config.
-      #
-      # Returns <GeneratedImageFile>
+
       def initialize(site, base, dir, name, preset)
         @site = site
         @base = base
@@ -19,38 +12,15 @@ module Jekyll
         @name = name
         @relative_path = File.join(*[@dir, @name].compact)
         @extname = File.extname(@name)
-        @dst_dir = preset.delete('destination')
-        @src_dir = preset.delete('source')
+        @src_name = preset.delete('src_name')
         @commands = preset
       end
 
-      # Obtains source file path by substituting the preset's source directory
-      # for the destination directory.
-      #
-      # Returns source file path.
       def path
-        File.join(@base, @dir.sub(@dst_dir, @src_dir), @name)
+        File.join(@base, @dir, @src_name)
       end
 
-      # Use MiniMagick to create a derivative image at the destination
-      # specified (if the original is modified).
-      #   +dest+ is the String path to the destination dir
-      #
-      # Returns false if the file was not modified since last time (no-op).
       def write(dest)
-        dest_path = destination(dest)
-
-        return false if File.exist? dest_path and !modified?
-
-        self.class.mtimes[path] = mtime
-
-        FileUtils.mkdir_p(File.dirname(dest_path))
-        image = ::MiniMagick::Image.open(path)
-        @commands.each_pair do |command, arg|
-          image.send command, arg
-        end
-        image.write dest_path
-
         true
       end
 
@@ -59,16 +29,52 @@ module Jekyll
     class MiniMagickGenerator < Generator
       safe true
 
-      # Find all image files in the source directories of the presets specified
-      # in the site config.  Add a GeneratedImageFile to the static_files stack
-      # for later processing.
       def generate(site)
         return unless site.config['mini_magick']
 
+        commands = []
+
         site.config['mini_magick'].each_pair do |name, preset|
-          Dir.glob(File.join(site.source, preset['source'], "*.{png,jpg,jpeg,gif}")) do |source|
-            site.static_files << GeneratedImageFile.new(site, site.source, preset['destination'], File.basename(source), preset.clone)
+          src_preset = preset.clone
+
+          src_dir = src_preset.delete('source')
+          Dir.glob(File.join(site.source, src_dir, "*.{png,jpg,jpeg,gif}")) do |source|
+            basename = File.basename(source)
+            extname = File.extname(basename)
+            name = File.basename(basename, extname)
+            size = src_preset['resize'].match(/\d*x\d*/)[0]
+            dest_name = name + '-' + size + extname
+            
+            src_path = File.join(site.source, src_dir, basename)
+            cache_path_without_filename = File.join(site.source, ".minimagick-cache", src_dir)
+            cache_path = File.join(cache_path_without_filename, dest_name)
+            dest_path = File.join(site.source, src_dir, dest_name)
+
+            command = {'cache_path' => cache_path, 
+                       'dest_path' => dest_path}
+
+            commands << command
+
+            FileUtils.mkdir_p cache_path_without_filename
+
+            image = ::MiniMagick::Image.open(src_path)
+            image.combine_options do |b|
+              src_preset.each_pair do |command, arg|
+                b.send command, arg
+              end
+            end
+            image.write cache_path
+
+            src_preset['src_name'] = basename
+
+            site.static_files << GeneratedImageFile.new(site, site.source, src_dir, dest_name, src_preset)
           end
+        end
+
+        commands.each do |command|
+          cache_path = command['cache_path']
+          dest_path = command['dest_path']
+          FileUtils.mv cache_path, dest_path
         end
       end
     end
